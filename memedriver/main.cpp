@@ -23,6 +23,7 @@ extern "C" NTSTATUS FindDriver(PDRIVER_OBJECT* hooked_driver) {
     OBJECT_ATTRIBUTES attributes{};
     UNICODE_STRING directory_name{};
     PVOID Directory{};
+    UINT32 HookableDrivers{};
 
     if (hooked_driver == nullptr)
         return STATUS_INVALID_PARAMETER;
@@ -63,11 +64,31 @@ extern "C" NTSTATUS FindDriver(PDRIVER_OBJECT* hooked_driver) {
 
             if (driver->DriverUnload != nullptr)
             {
+                auto& close_irp = driver->MajorFunction[IRP_MJ_CLOSE];
+                auto& open_irp = driver->MajorFunction[IRP_MJ_CREATE];
+                auto& device_io_irp = driver->MajorFunction[IRP_MJ_DEVICE_CONTROL];
+
+                // Check if IRP_MJ_CLOSE, IRP_MJ_CREATE and IRP_MJ_DEVICE_CONTROL point to the same address
+                // and are outside of the module
+                if(uintptr_t(close_irp) == uintptr_t(open_irp) && uintptr_t(open_irp) == uintptr_t(device_io_irp))
+                {
+                    const auto base = uintptr_t(driver->DriverSection);
+                    const auto max = base + driver->Size;
+
+                    if(uintptr_t(close_irp) < base || uintptr_t(close_irp) > max)
+                    {
+                        DbgPrint("Hookable Driver %wZ found!\n", &driver->DriverName);
+                        HookableDrivers++;
+                    }
+
+                }
+                // Hook unload routine
                 if (memedriver::original_unload == nullptr)
                 {
                     DbgPrint("Hooking unload of %wZ!\n", &driver->DriverName);
                     memedriver::original_unload = driver->DriverUnload;
                     driver->DriverUnload = &HookedUnloadDriver;
+
                     *hooked_driver = driver;
                 }
             }
@@ -77,13 +98,13 @@ extern "C" NTSTATUS FindDriver(PDRIVER_OBJECT* hooked_driver) {
                 break;
         }
 
-        if (*hooked_driver != nullptr)
-            break;
     }
 
     // Release the acquired resources back to the OS
     ObDereferenceObject(directory);
     ZwClose(handle);
+
+    DbgPrint("%lu hookable drivers found\n", HookableDrivers);
 
     return STATUS_SUCCESS;
 }
