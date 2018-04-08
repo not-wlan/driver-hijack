@@ -7,7 +7,9 @@
 extern "C" __declspec(dllexport) VOID DriverUnload(_In_ struct _DRIVER_OBJECT *)
 {
     RestoreDriver();
+#ifdef DEBUG
     DbgPrint("MEMEDriver unloaded!\n");
+#endif
 }
 
 extern "C" NTSTATUS DriverEntry(_In_ struct _DRIVER_OBJECT * DriverObject, PUNICODE_STRING)

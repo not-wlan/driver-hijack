@@ -57,7 +57,7 @@ extern "C" bool IsInNtoskrnl(PVOID address)
     return uintptr_t(address) >= uintptr_t(entry->DllBase) && uintptr_t(address) <= (uintptr_t(entry->DllBase) + entry->SizeOfImage);
 }
 
-extern "C" NTSTATUS HijackDriver(const PDRIVER_OBJECT driver)
+extern "C" NTSTATUS HijackDriver(_In_ struct _DRIVER_OBJECT * driver)
 {
     auto& irp_create = driver->MajorFunction[IRP_MJ_CREATE];
     auto& irp_close = driver->MajorFunction[IRP_MJ_CLOSE];
@@ -171,7 +171,7 @@ extern "C" VOID RestoreDriver()
     original::driver_object = nullptr;
 }
 
-extern "C" NTSTATUS FindDriver(PDRIVER_OBJECT ignore)
+extern "C" NTSTATUS FindDriver(_In_ struct _DRIVER_OBJECT * ignore /*= nullptr*/)
 {
     HANDLE handle{};
     OBJECT_ATTRIBUTES attributes{};
@@ -250,7 +250,7 @@ extern "C" VOID PrintInfo()
 #endif
 }
 
-void DispatchUnload(const PDRIVER_OBJECT driver)
+void DispatchUnload(_In_ struct _DRIVER_OBJECT * driver)
 {
     UnloadDriver(driver);
     RestoreDriver();
