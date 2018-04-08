@@ -1,10 +1,21 @@
 #pragma once
+
+#include <Fltkernel.h>
 #include <ntddk.h>
+
 
 extern "C" NTSTATUS DriverEntry(_In_ struct _DRIVER_OBJECT * DriverObject, PUNICODE_STRING RegistryPath);
 extern "C" __declspec(dllexport) VOID DriverUnload(_In_ struct _DRIVER_OBJECT *);
 extern "C" NTSTATUS DriverInitialize(_In_ struct _DRIVER_OBJECT * DriverObject, PUNICODE_STRING);
-extern "C" NTSTATUS FindDriver(PDRIVER_OBJECT*);
+extern "C" NTSTATUS FindDriver(PDRIVER_OBJECT*, PDRIVER_OBJECT Ignore);
+extern "C" NTSTATUS DestroyDevice();
+extern "C" _Dispatch_type_(IRP_MJ_DEVICE_CONTROL)
+NTSTATUS CatchDeviceCtrl(PDEVICE_OBJECT, PIRP);
+_Dispatch_type_(IRP_MJ_CREATE)
+extern "C" NTSTATUS CatchCreate(PDEVICE_OBJECT, PIRP);
+_Dispatch_type_(IRP_MJ_CLOSE)
+extern "C"  NTSTATUS CatchClose(PDEVICE_OBJECT, PIRP);
+extern "C" NTSTATUS RestoreIRPHandler();
 
 #define DEVICE_NAME(name) L"\\Device\\"#name
 #define DOSDEVICE_NAME(name) L"\\DosDevices\\"#name
@@ -15,26 +26,15 @@ extern "C" NTSTATUS FindDriver(PDRIVER_OBJECT*);
 #pragma alloc_text(INIT, FindDriver)
 
 #pragma alloc_text(PAGE, DriverUnload)
+#pragma alloc_text(PAGE, DestroyDevice)
+#pragma alloc_text(PAGE, RestoreIRPHandler)
+
+#pragma alloc_text(NONPAGED, CatchCreate)
+#pragma alloc_text(NONPAGED, CatchDeviceCtrl)
+#pragma alloc_text(NONPAGED, CatchClose)
 
 // disable warning for unnamed structs/unions because i cant be arsed to name undocumented win structs lol
 #pragma warning(disable: 4201)
-
-typedef struct _EX_PUSH_LOCK_WAIT_BLOCK *PEX_PUSH_LOCK_WAIT_BLOCK;
-
-typedef struct _EX_PUSH_LOCK
-{
-    union
-    {
-        ULONG Locked : 1;
-        ULONG Waiting : 1;
-        ULONG Waking : 1;
-        ULONG MultipleShared : 1;
-        ULONG Shared : 28;
-        ULONG Value;
-        PVOID Ptr;
-    };
-} EX_PUSH_LOCK, *PEX_PUSH_LOCK;
-
 
 typedef struct _OBJECT_CREATE_INFORMATION
 {
@@ -168,8 +168,6 @@ typedef struct _OBJECT_DIRECTORY
 } OBJECT_DIRECTORY, *POBJECT_DIRECTORY;
 
 // Creates a driver object if you pass an initialization routine
-EXTERN_C __declspec(dllimport) NTSTATUS NTAPI IoCreateDriver(IN PUNICODE_STRING DriverName OPTIONAL, IN PDRIVER_INITIALIZE InitializationFunction);
-EXTERN_C NTSYSCALLAPI NTSTATUS NTAPI ZwEnumerateDriverEntries(_Out_writes_bytes_opt_(*BufferLength) PVOID Buffer, _Inout_ PULONG BufferLength);
-EXTERN_C NTSYSCALLAPI POBJECT_TYPE IoDriverObjectType;
-EXTERN_C NTSYSCALLAPI POBJECT_TYPE ObGetObjectType(PVOID Object);
 EXTERN_C NTSYSCALLAPI NTSTATUS ZwOpenDirectoryObject(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+EXTERN_C NTSYSCALLAPI VOID ExAcquirePushLockExclusiveEx(PEX_PUSH_LOCK, ULONG Flags);
+EXTERN_C NTSYSCALLAPI VOID ExReleasePushLockExclusiveEx(PEX_PUSH_LOCK, ULONG Flags);
