@@ -2,6 +2,7 @@
 
 extern "C" NTSTATUS CatchCreate(PDEVICE_OBJECT, PIRP)
 {
+    // TODO: Wipe INIT section on first IRP ;)
     return STATUS_SUCCESS;
 }
 

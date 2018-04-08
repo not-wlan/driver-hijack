@@ -44,11 +44,16 @@ extern "C" bool IsInNtoskrnl(PVOID address)
 {
     PKLDR_DATA_TABLE_ENTRY entry = nullptr;
 
-    if (NT_SUCCESS(GetNtoskrnl(&entry)))
+    if (!NT_SUCCESS(GetNtoskrnl(&entry)))
     {
+#ifdef DEBUG
+        DbgPrint("Failed to get ntoskrnl\n");
+#endif
         return false;
     }
-
+#ifdef DEBUG
+    DbgPrint("Module: %wZ\n", &entry->BaseDllName);
+#endif
     return uintptr_t(address) >= uintptr_t(entry->DllBase) && uintptr_t(address) <= (uintptr_t(entry->DllBase) + entry->SizeOfImage);
 }
 
@@ -57,15 +62,23 @@ extern "C" NTSTATUS HijackDriver(const PDRIVER_OBJECT driver)
     auto& irp_create = driver->MajorFunction[IRP_MJ_CREATE];
     auto& irp_close = driver->MajorFunction[IRP_MJ_CLOSE];
     auto& irp_device_control = driver->MajorFunction[IRP_MJ_DEVICE_CONTROL];
-
+#ifdef DEBUG
+    DbgPrint("Evaluating %wZ @ 0x%p\n", &driver->DriverName, driver);
+#endif
     // Check if the IRP handler are in ntoskrnl. That'd mean that they're most likely the invalid request routine.
     if (!all_in_ntoskrnl(irp_create, irp_close, irp_device_control))
     {
+#ifdef DEBUG
+        DbgPrint("IRP handler aren't in ntoskrnl. Skipping.\n");
+#endif
         return STATUS_INCOMPATIBLE_DRIVER_BLOCKED;
     }
 
     if (driver->DeviceObject != nullptr)
     {
+#ifdef DEBUG
+        DbgPrint("Driver already has a device. Skipping.");
+#endif
         return STATUS_DEVICE_ALREADY_ATTACHED;
     }
 
@@ -81,6 +94,9 @@ extern "C" NTSTATUS HijackDriver(const PDRIVER_OBJECT driver)
     if (!NT_SUCCESS(status))
     {
         original::device = nullptr;
+#ifdef DEBUG
+        DbgPrint("Failed to create a spoofed device. Skipping.\n");
+#endif
         return status;
     }
 
@@ -90,6 +106,9 @@ extern "C" NTSTATUS HijackDriver(const PDRIVER_OBJECT driver)
     {
         IoDeleteDevice(original::device);
         original::device = nullptr;
+#ifdef DEBUG
+        DbgPrint("Failed to create symlink for spoofed device. Skipping.\n");
+#endif
         return status;
     }
 
@@ -112,7 +131,9 @@ extern "C" NTSTATUS HijackDriver(const PDRIVER_OBJECT driver)
         original::unload = driver->DriverUnload;
         driver->DriverUnload = &DispatchUnload;
     }
-
+#ifdef DEBUG
+    DbgPrint("Successfully hooked %wZ @ 0x%p\n", &driver->DriverName, driver);
+#endif
     return STATUS_SUCCESS;
 }
 
@@ -139,7 +160,9 @@ extern "C" VOID RestoreDriver()
 
     if (NT_ERROR(IoDeleteSymbolicLink(&dos_device_name)))
     {
+#ifdef DEBUG
         DbgPrint("Failed to delete Symbolic link!\n");
+#endif
     }
 
     IoDeleteDevice(original::device);
@@ -222,7 +245,9 @@ extern "C" NTSTATUS FindDriver(PDRIVER_OBJECT ignore)
 
 extern "C" VOID PrintInfo()
 {
+#ifdef DEBUG
     DbgPrint("Hijacked Driver: %wZ @ 0x%p\n", &original::driver_object->DriverName, original::driver_object);
+#endif
 }
 
 void DispatchUnload(const PDRIVER_OBJECT driver)
