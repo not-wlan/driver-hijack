@@ -3,7 +3,6 @@
 
 #pragma comment(lib, "ntoskrnl.lib")
 
-
 extern "C" __declspec(dllexport) VOID DriverUnload(_In_ struct _DRIVER_OBJECT *)
 {
     RestoreDriver();

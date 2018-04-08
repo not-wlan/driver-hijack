@@ -11,10 +11,10 @@ namespace memedriver
     constexpr auto dos_device_name = DOSDEVICE_NAME(meme);
 }
 
-extern "C" NTSTATUS GetModule(IN PUNICODE_STRING name, OUT PKLDR_DATA_TABLE_ENTRY* out_entry);
-extern "C" NTSTATUS GetNtoskrnl(OUT PKLDR_DATA_TABLE_ENTRY* out_entry);
-extern "C" bool IsInNtoskrnl(PVOID address);
 extern "C" NTSTATUS HijackDriver(_In_ struct _DRIVER_OBJECT * driver);
+extern "C" bool IsInNtoskrnl(PVOID address);
+extern "C" NTSTATUS GetNtoskrnl(OUT PKLDR_DATA_TABLE_ENTRY* out_entry);
+extern "C" NTSTATUS GetModule(IN PUNICODE_STRING name, OUT PKLDR_DATA_TABLE_ENTRY* out_entry);
 extern "C" NTSTATUS FindDriver(_In_ struct _DRIVER_OBJECT * ignore = nullptr);
 extern "C" VOID PrintInfo();
 
@@ -28,6 +28,7 @@ extern "C" VOID RestoreDriver();
 #pragma alloc_text(INIT, FindDriver)
 #pragma alloc_text(INIT, PrintInfo)
 
+#pragma alloc_text(NONPAGED, DispatchUnload)
 #pragma alloc_text(NONPAGED, RestoreDriver)
 
 template<typename... Args>
