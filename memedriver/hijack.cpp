@@ -1,6 +1,8 @@
 #include "hijack.hpp"
+#include "driver.hpp"
+#include "util.hpp"
 
-#include "hooks.hpp"
+//#define DEBUG 1
 
 namespace original
 {
@@ -8,53 +10,8 @@ namespace original
     PDRIVER_UNLOAD unload = nullptr;
     PDRIVER_DISPATCH major_functions[IRP_MJ_MAXIMUM_FUNCTION + 1] = { nullptr };
     PDEVICE_OBJECT device = nullptr;
-}
-
-extern "C" NTSTATUS GetModule(IN const PUNICODE_STRING name, OUT PKLDR_DATA_TABLE_ENTRY* out_entry)
-{
-    if (name == nullptr)
-        return STATUS_INVALID_PARAMETER;
-
-    if (IsListEmpty(PsLoadedModuleList))
-        return STATUS_NOT_FOUND;
-
-    for (auto list_entry = PsLoadedModuleList->Flink; list_entry != PsLoadedModuleList; list_entry = list_entry->Flink)
-    {
-        auto entry = CONTAINING_RECORD(list_entry, KLDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-
-        if (RtlCompareUnicodeString(&entry->BaseDllName, name, TRUE) == 0)
-        {
-            *out_entry = entry;
-            return STATUS_SUCCESS;
-        }
-    }
-
-    return STATUS_NOT_FOUND;
-}
-
-extern "C" NTSTATUS GetNtoskrnl(OUT PKLDR_DATA_TABLE_ENTRY* out_entry)
-{
-    if (IsListEmpty(PsLoadedModuleList))
-        return STATUS_NOT_FOUND;
-    *out_entry = CONTAINING_RECORD(PsLoadedModuleList, KLDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-    return STATUS_SUCCESS;
-}
-
-extern "C" bool IsInNtoskrnl(PVOID address)
-{
-    PKLDR_DATA_TABLE_ENTRY entry = nullptr;
-
-    if (!NT_SUCCESS(GetNtoskrnl(&entry)))
-    {
-#ifdef DEBUG
-        DbgPrint("Failed to get ntoskrnl\n");
-#endif
-        return false;
-    }
-#ifdef DEBUG
-    DbgPrint("Module: %wZ\n", &entry->BaseDllName);
-#endif
-    return uintptr_t(address) >= uintptr_t(entry->DllBase) && uintptr_t(address) <= (uintptr_t(entry->DllBase) + entry->SizeOfImage);
+    BOOLEAN destroy_device = FALSE;
+    ULONGLONG guard_icall = 0;
 }
 
 extern "C" NTSTATUS HijackDriver(_In_ struct _DRIVER_OBJECT * driver)
@@ -62,78 +19,87 @@ extern "C" NTSTATUS HijackDriver(_In_ struct _DRIVER_OBJECT * driver)
     auto& irp_create = driver->MajorFunction[IRP_MJ_CREATE];
     auto& irp_close = driver->MajorFunction[IRP_MJ_CLOSE];
     auto& irp_device_control = driver->MajorFunction[IRP_MJ_DEVICE_CONTROL];
+
 #ifdef DEBUG
     DbgPrint("Evaluating %wZ @ 0x%p\n", &driver->DriverName, driver);
 #endif
+
+#ifdef NO_WDF
     // Check if the IRP handler are in ntoskrnl. That'd mean that they're most likely the invalid request routine.
-    if (!all_in_ntoskrnl(irp_create, irp_close, irp_device_control))
+    if (!all_hookable(driver, irp_create, irp_close, irp_device_control))
     {
 #ifdef DEBUG
-        DbgPrint("IRP handler aren't in ntoskrnl. Skipping.\n");
+        DbgPrint("IRP handler(s) aren't in ntoskrnl or the current driver. Skipping.\n");
 #endif
         return STATUS_INCOMPATIBLE_DRIVER_BLOCKED;
     }
-
-    if (driver->DeviceObject != nullptr)
-    {
-#ifdef DEBUG
-        DbgPrint("Driver already has a device. Skipping.");
 #endif
-        return STATUS_DEVICE_ALREADY_ATTACHED;
+
+    // create device
+    if (driver->DeviceObject == nullptr)
+    {
+        const auto status = CreateSpoofedDevice(driver, &original::device);
+
+        if(NT_ERROR(status))
+        {
+#ifdef DEBUG
+            DbgPrint("Failed to create Device!\n");
+#endif
+            return status;
+        }
+
+        original::destroy_device = TRUE;   
+    }
+    else
+    {
+        const auto device_name_info = ObQueryNameInfo(driver->DeviceObject);
+
+        if(device_name_info == nullptr)
+        {
+            DbgPrint("Unnamed device. Skipping.\n");
+            return STATUS_NOT_IMPLEMENTED;
+        }
+
+        // cf guard fucks you over if you try to hijack existing devices
+        original::guard_icall = SetCFGDispatch(driver, ULONGLONG(_ignore_icall)); 
+        original::destroy_device = FALSE;
     }
 
-    UNICODE_STRING device_name{}, dos_device_name{};
-
-    RtlInitUnicodeString(&device_name, memedriver::device_name);
-    RtlInitUnicodeString(&dos_device_name, memedriver::dos_device_name);
-
-    // Create spoofed device
-    // TODO: hijack existing device instead?
-    auto status = IoCreateDevice(driver, 0, &device_name, FILE_DEVICE_KS, FILE_DEVICE_SECURE_OPEN, FALSE, &original::device);
-
-    if (!NT_SUCCESS(status))
+    original::device = driver->DeviceObject;
+   
+    // backup irp handler to call original/ restore them later
+    if(NT_ERROR(CopyMajorFunctions( driver->MajorFunction, original::major_functions, IRP_MJ_MAXIMUM_FUNCTION + 1)))
     {
-        original::device = nullptr;
-#ifdef DEBUG
-        DbgPrint("Failed to create a spoofed device. Skipping.\n");
-#endif
-        return status;
+        if(original::destroy_device == TRUE)
+            DestroyDevice(&original::device);
+        original::destroy_device = FALSE;
+        return STATUS_COPY_PROTECTION_FAILURE;
     }
 
-    status = IoCreateSymbolicLink(&dos_device_name, &device_name);
-
-    if (!NT_SUCCESS(status))
-    {
-        IoDeleteDevice(original::device);
-        original::device = nullptr;
-#ifdef DEBUG
-        DbgPrint("Failed to create symlink for spoofed device. Skipping.\n");
-#endif
-        return status;
-    }
-
-    // Finish off initialization by setting flags
-    original::device->Flags &= ~DO_DEVICE_INITIALIZING;
-    original::device->Flags |= DO_BUFFERED_IO;
-
-    original::major_functions[IRP_MJ_CREATE] = irp_create;
-    original::major_functions[IRP_MJ_CLOSE] = irp_close;
-    original::major_functions[IRP_MJ_DEVICE_CONTROL] = irp_device_control;
-
+    // replace irp handlers
     irp_create = &CatchCreate;
     irp_close = &CatchClose;
     irp_device_control = &CatchDeviceCtrl;
 
     original::driver_object = driver;
 
+    if(!NT_SUCCESS(CreateSymLink(original::device)))
+    {
+#ifdef DEBUG
+        DbgPrint("Failed to create symlink\n");
+#endif
+    }
+
     // Windows interprets no unload routine as can't be unloaded so it wouldn't be benefitial to add an unload routine to a driver that doesn't support it.
     if (driver->DriverUnload != nullptr) {
         original::unload = driver->DriverUnload;
         driver->DriverUnload = &DispatchUnload;
     }
+
 #ifdef DEBUG
     DbgPrint("Successfully hooked %wZ @ 0x%p\n", &driver->DriverName, driver);
 #endif
+
     return STATUS_SUCCESS;
 }
 
@@ -149,25 +115,18 @@ extern "C" VOID RestoreDriver()
     }
 
     // restore irp handlers
-    auto& major_functions = original::driver_object->MajorFunction;
-
-    major_functions[IRP_MJ_CREATE] = original::major_functions[IRP_MJ_CREATE];
-    major_functions[IRP_MJ_CLOSE] = original::major_functions[IRP_MJ_CLOSE];
-    major_functions[IRP_MJ_DEVICE_CONTROL] = original::major_functions[IRP_MJ_DEVICE_CONTROL];
-
-    UNICODE_STRING dos_device_name{};
-    RtlInitUnicodeString(&dos_device_name, memedriver::dos_device_name);
-
-    if (NT_ERROR(IoDeleteSymbolicLink(&dos_device_name)))
+    if(NT_ERROR(CopyMajorFunctions(original::major_functions,original::driver_object->MajorFunction, IRP_MJ_MAXIMUM_FUNCTION + 1)))
     {
-#ifdef DEBUG
-        DbgPrint("Failed to delete Symbolic link!\n");
-#endif
+        // nothing we can really do here tbf
     }
 
-    IoDeleteDevice(original::device);
-    original::device = nullptr;
+    // re-enable cf guard
+    SetCFGDispatch(original::driver_object, original::guard_icall);
 
+    if (original::destroy_device == TRUE)
+        DestroyDevice(&original::device);
+    original::destroy_device = FALSE;
+    DeleteSymLink();
     original::driver_object = nullptr;
 }
 
@@ -250,10 +209,51 @@ extern "C" VOID PrintInfo()
 #endif
 }
 
-void DispatchUnload(_In_ struct _DRIVER_OBJECT * driver)
+#pragma region hooks
+
+extern "C" void DispatchUnload(_In_ struct _DRIVER_OBJECT * driver)
 {
     UnloadDriver(driver);
     RestoreDriver();
     return driver->DriverUnload(driver);
 }
 
+extern "C" NTSTATUS CallOriginal(const int idx, _In_ struct _DEVICE_OBJECT *DeviceObject, _Inout_ struct _IRP *Irp)
+{
+#ifdef DEBUG
+    //DbgPrint("Calling original\n");
+#endif
+    if (original::destroy_device == TRUE)
+        return STATUS_SUCCESS;
+
+    const auto& function = original::major_functions[idx];
+
+    if (function == nullptr)
+        return STATUS_SUCCESS;
+#ifdef DEBUG
+    //DbgPrint("Calling original @ 0x%p\n", function);
+#endif 
+    return function(DeviceObject, Irp);
+}
+
+extern "C" NTSTATUS CatchCreate(PDEVICE_OBJECT device, PIRP irp)
+{
+    // TODO: Wipe INIT section on first IRP ;)
+    return CallOriginal(IRP_MJ_CREATE, device, irp);
+}
+
+extern "C" NTSTATUS CatchClose(PDEVICE_OBJECT device, PIRP irp)
+{
+    return CallOriginal(IRP_MJ_CLOSE, device, irp);
+}
+
+extern "C" NTSTATUS CatchDeviceCtrl(PDEVICE_OBJECT device, PIRP irp)
+{
+    return CallOriginal(IRP_MJ_DEVICE_CONTROL, device, irp);
+}
+
+void UnloadDriver(PDRIVER_OBJECT)
+{
+
+}
+#pragma endregion

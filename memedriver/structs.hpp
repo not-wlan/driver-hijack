@@ -1,6 +1,7 @@
 #pragma once
 #include <fltKernel.h>
 #include <ntddk.h>
+#include <ntimage.h>
 
 // disable warning for unnamed structs/unions because i cant be arsed to name undocumented win structs lol
 #pragma warning(disable: 4201)
@@ -130,19 +131,6 @@ typedef struct _OBJECT_DIRECTORY
     ULONG Flags;
 } OBJECT_DIRECTORY, *POBJECT_DIRECTORY;
 
-typedef struct _NON_PAGED_DEBUG_INFO
-{
-    USHORT      Signature;
-    USHORT      Flags;
-    ULONG       Size;
-    USHORT      Machine;
-    USHORT      Characteristics;
-    ULONG       TimeDateStamp;
-    ULONG       CheckSum;
-    ULONG       SizeOfImage;
-    ULONGLONG   ImageBase;
-} NON_PAGED_DEBUG_INFO, *PNON_PAGED_DEBUG_INFO;
-
 typedef struct _KLDR_DATA_TABLE_ENTRY
 {
     LIST_ENTRY InLoadOrderLinks;
@@ -167,8 +155,11 @@ typedef struct _KLDR_DATA_TABLE_ENTRY
 } KLDR_DATA_TABLE_ENTRY, *PKLDR_DATA_TABLE_ENTRY;
 
 
-// Creates a driver object if you pass an initialization routine
 EXTERN_C NTSYSCALLAPI NTSTATUS ZwOpenDirectoryObject(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
 EXTERN_C NTSYSCALLAPI VOID ExAcquirePushLockExclusiveEx(PEX_PUSH_LOCK, ULONG Flags);
 EXTERN_C NTSYSCALLAPI VOID ExReleasePushLockExclusiveEx(PEX_PUSH_LOCK, ULONG Flags);
 EXTERN_C NTSYSCALLAPI PLIST_ENTRY PsLoadedModuleList;
+EXTERN_C NTSYSCALLAPI PVOID RtlImageDirectoryEntryToData(_In_  PVOID   Base, _In_  BOOLEAN MappedAsImage, _In_  USHORT  DirectoryEntry, _Out_ PULONG  Size);
+EXTERN_C NTSYSCALLAPI PVOID ObQueryNameInfo(_In_ PVOID Object);
+// empty icall dispatch handler to disable cfg
+extern "C" void _ignore_icall(void);
