@@ -20,7 +20,6 @@ extern "C" NTSTATUS DriverEntry(_In_ struct _DRIVER_OBJECT * DriverObject, PUNIC
 
     if(NT_SUCCESS(FindDriver(DriverObject)))
     {
-        PrintInfo();
         return STATUS_SUCCESS;
     }
 

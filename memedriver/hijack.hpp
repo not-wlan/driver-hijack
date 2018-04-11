@@ -17,13 +17,13 @@ extern "C" VOID DispatchUnload(PDRIVER_OBJECT);
 
 extern "C" NTSTATUS HijackDriver(_In_ struct _DRIVER_OBJECT * driver);
 extern "C" NTSTATUS FindDriver(_In_ struct _DRIVER_OBJECT * ignore = nullptr);
-extern "C" VOID PrintInfo();
 extern "C" VOID RestoreDriver();
 
 #pragma alloc_text(INIT, HijackDriver)
 #pragma alloc_text(INIT, FindDriver)
-#pragma alloc_text(INIT, PrintInfo)
 #pragma alloc_text(NONPAGED, RestoreDriver)
 
+#ifdef NO_WDF
 template<typename... Args>
 bool all_hookable(PDRIVER_OBJECT driver, Args... args) { return (... && IsHookableIRPHandler(driver, args)); }
+#endif

@@ -16,15 +16,15 @@ namespace original
 
 extern "C" NTSTATUS HijackDriver(_In_ struct _DRIVER_OBJECT * driver)
 {
-    auto& irp_create = driver->MajorFunction[IRP_MJ_CREATE];
-    auto& irp_close = driver->MajorFunction[IRP_MJ_CLOSE];
-    auto& irp_device_control = driver->MajorFunction[IRP_MJ_DEVICE_CONTROL];
-
 #ifdef DEBUG
     DbgPrint("Evaluating %wZ @ 0x%p\n", &driver->DriverName, driver);
 #endif
 
+    // exclude windows driver framework drivers
 #ifdef NO_WDF
+    auto& irp_create = driver->MajorFunction[IRP_MJ_CREATE];
+    auto& irp_close = driver->MajorFunction[IRP_MJ_CLOSE];
+    auto& irp_device_control = driver->MajorFunction[IRP_MJ_DEVICE_CONTROL];
     // Check if the IRP handler are in ntoskrnl. That'd mean that they're most likely the invalid request routine.
     if (!all_hookable(driver, irp_create, irp_close, irp_device_control))
     {
@@ -38,6 +38,7 @@ extern "C" NTSTATUS HijackDriver(_In_ struct _DRIVER_OBJECT * driver)
     // create device
     if (driver->DeviceObject == nullptr)
     {
+
         const auto status = CreateSpoofedDevice(driver, &original::device);
 
         if(NT_ERROR(status))
@@ -61,7 +62,7 @@ extern "C" NTSTATUS HijackDriver(_In_ struct _DRIVER_OBJECT * driver)
         }
 
         // cf guard fucks you over if you try to hijack existing devices
-        original::guard_icall = SetCFGDispatch(driver, ULONGLONG(_ignore_icall)); 
+        original::guard_icall = SetCfgDispatch(driver, ULONGLONG(_ignore_icall)); 
         original::destroy_device = FALSE;
     }
 
@@ -77,9 +78,9 @@ extern "C" NTSTATUS HijackDriver(_In_ struct _DRIVER_OBJECT * driver)
     }
 
     // replace irp handlers
-    irp_create = &CatchCreate;
-    irp_close = &CatchClose;
-    irp_device_control = &CatchDeviceCtrl;
+    driver->MajorFunction[IRP_MJ_CREATE] = &CatchCreate;
+    driver->MajorFunction[IRP_MJ_CLOSE] = &CatchClose;
+    driver->MajorFunction[IRP_MJ_DEVICE_CONTROL] = &CatchDeviceCtrl;
 
     original::driver_object = driver;
 
@@ -121,12 +122,14 @@ extern "C" VOID RestoreDriver()
     }
 
     // re-enable cf guard
-    SetCFGDispatch(original::driver_object, original::guard_icall);
+    SetCfgDispatch(original::driver_object, original::guard_icall);
 
     if (original::destroy_device == TRUE)
         DestroyDevice(&original::device);
     original::destroy_device = FALSE;
+
     DeleteSymLink();
+
     original::driver_object = nullptr;
 }
 
@@ -159,7 +162,9 @@ extern "C" NTSTATUS FindDriver(_In_ struct _DRIVER_OBJECT * ignore /*= nullptr*/
 
     ExAcquirePushLockExclusiveEx(&directory_object->Lock, 0);
 
-    // Traverse entry tree
+    // traverse hash table with 37 entries
+    // when a new object is created, the object manager computes a hash value in the range zero to 36 from the object name and creates an OBJECT_DIRECTORY_ENTRY.    
+    // http://www.informit.com/articles/article.aspx?p=22443&seqNum=7
     for (auto entry : directory_object->HashBuckets)
     {
         if (entry == nullptr)
@@ -202,12 +207,6 @@ extern "C" NTSTATUS FindDriver(_In_ struct _DRIVER_OBJECT * ignore /*= nullptr*/
     return success == TRUE ? STATUS_SUCCESS : STATUS_NOT_FOUND;
 }
 
-extern "C" VOID PrintInfo()
-{
-#ifdef DEBUG
-    DbgPrint("Hijacked Driver: %wZ @ 0x%p\n", &original::driver_object->DriverName, original::driver_object);
-#endif
-}
 
 #pragma region hooks
 
@@ -220,9 +219,6 @@ extern "C" void DispatchUnload(_In_ struct _DRIVER_OBJECT * driver)
 
 extern "C" NTSTATUS CallOriginal(const int idx, _In_ struct _DEVICE_OBJECT *DeviceObject, _Inout_ struct _IRP *Irp)
 {
-#ifdef DEBUG
-    //DbgPrint("Calling original\n");
-#endif
     if (original::destroy_device == TRUE)
         return STATUS_SUCCESS;
 
@@ -231,7 +227,7 @@ extern "C" NTSTATUS CallOriginal(const int idx, _In_ struct _DEVICE_OBJECT *Devi
     if (function == nullptr)
         return STATUS_SUCCESS;
 #ifdef DEBUG
-    //DbgPrint("Calling original @ 0x%p\n", function);
+    DbgPrint("Calling original @ 0x%p\n", function);
 #endif 
     return function(DeviceObject, Irp);
 }

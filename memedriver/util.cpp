@@ -78,7 +78,7 @@ extern "C" bool IsHookableIRPHandler(PDRIVER_OBJECT driver, PDRIVER_DISPATCH dis
     return address >= min && address <= max;
 }
 
-extern "C" ULONGLONG SetCFGDispatch(const PDRIVER_OBJECT driver, const ULONGLONG new_dispatch)
+extern "C" ULONGLONG SetCfgDispatch(const PDRIVER_OBJECT driver, const ULONGLONG new_dispatch)
 {
     ULONG size = 0;
     const auto directory = PIMAGE_LOAD_CONFIG_DIRECTORY(RtlImageDirectoryEntryToData(driver->DriverStart, TRUE, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &size));
